@@ -1,0 +1,7 @@
+dll_name at compilation has to match the actual vendor dll name,
+when it doesn't either the proxy will fail when the application calls it at runtime
+or the testing will fail or both. Need to change all instances of the trace dll
+name and original dll name to match from build time to testing to runtime.
+
+running cmake configuration wipes traces.ini and then adds enabled=1 back.
+Fix? maybe add to readme/build notes as appropriate.

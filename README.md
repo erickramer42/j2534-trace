@@ -38,7 +38,7 @@ Win32 is required. The DLL must match the bitness of the target
 application. Verify with:
 
 ```
-dumpbin /headers build/proxy/OBDXTrace.dll | findstr machine
+dumpbin /headers build/proxy/trace.dll | findstr machine
 ```
 
 (must print `x86`)
@@ -46,9 +46,9 @@ dumpbin /headers build/proxy/OBDXTrace.dll | findstr machine
 Build outputs:
 
 ```
-build/proxy/OBDXTrace.dll      deployable proxy
-test/OBDXVX_J2534.dll          proxy copy placed in the test rig
-test/OBDXVX_J2534_real.dll     mock driver for testing
+build/proxy/trace.dll      deployable proxy
+test/vendor_J2534.dll          proxy copy placed in the test rig
+test/vendor_J2534_orig.dll     mock driver for testing
 test/trace.ini                 [trace] enabled=1
 ```
 
@@ -58,6 +58,8 @@ Run the harness after building:
 
 ```
 py -3.12 test\harness.py
+        or
+py -3.12 test/harness.py (if using unix based directory structure e.g. MINGW64, git bash, etc)
 ```
 
 Checks performed:
@@ -89,13 +91,13 @@ In the target application folder:
 1. Rename the original driver:
 
    ```
-   OBDXVX_J2534.dll  ->  OBDXVX_J2534_real.dll
+   <vendor_name>_J2534.dll  ->  <vendor_name>_J2534_real.dll
    ```
 
 2. Copy the built proxy in, named as the original:
 
    ```
-   build/proxy/OBDXTrace.dll  ->  OBDXVX_J2534.dll
+   build/proxy/trace.dll  ->  <vendor_name>_J2534.dll
    ```
 
 3. Add a `trace.ini` next to the DLLs:
@@ -111,24 +113,24 @@ Set `enabled=0` to disable logging without removing the proxy.
    mean the target app will reject it):
 
    ```
-   (Get-Item OBDXVX_J2534.dll).VersionInfo | Format-List FileVersion
+   (Get-Item <vendor_name>_J2534.dll).VersionInfo | Format-List FileVersion
    ```
 
 Expected folder layout after deployment:
 
 ```
 /
-├── OBDXVX_J2534.dll          <- our proxy
-├── OBDXVX_J2534_real.dll     <- original driver
-├── trace.ini                 <- [trace] enabled=1
-└── traces/                   <- created on first launch
+├── <vendor_name>_J2534.dll          <- our proxy
+├── <vendor_name>_J2534_orig.dll     <- original driver
+├── trace.ini                        <- [trace] enabled=1
+└── traces/                          <- created on first launch
     └── trace_YYYYMMDD_HHMMSS_mmm_pidNNNN.log
 ```
 
 ## To revert
 
-Rename `OBDXVX_J2534_real.dll` back to `OBDXVX_J2534.dll` and delete the
-proxy copy. The application is then completely stock again.
+Delete the proxy copy and rename `<vendor_name>_J2534_real.dll` back to 
+`<vendor_name>_J2534.dll`. The application is then completely stock again.
 
 ## Notes
 

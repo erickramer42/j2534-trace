@@ -11,7 +11,7 @@ static HMODULE g_real = NULL;
 static HMODULE g_selfModule = NULL;
 static std::wstring g_selfDir; // directory of this proxy DLL
 static bool g_enabled = true;
-static std::wstring g_realDllName = L"vendor_J2534_orig.dll"; // fallback
+static std::wstring g_realDllName; // name of the real J2534 DLL to load, from trace.ini
 
 // returns the directory containing this DLL, no trailing slash
 static const std::wstring& GetSelfDir()
@@ -31,7 +31,6 @@ static const std::wstring& GetSelfDir()
 static HMODULE LoadRealDriver()
 {   
     std::wstring real = GetSelfDir() + g_realDllName;
-    LogCall("Loading real J2534 driver: %ls", real.c_str());
     return LoadLibraryW(real.c_str());
 }
 
@@ -43,11 +42,13 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
         // [trace] enabled=0 disables frame logging
         std::wstring ini = GetSelfDir() + L"\\trace.ini";
         g_enabled = GetPrivateProfileIntW(L"trace", L"enabled", 1, ini.c_str()) != 0;
+
+        // [trace] dll_name=vendor_J2534_orig specifies the real DLL to load
         wchar_t name[MAX_PATH];
-        GetPrivateProfileStringW(L"trace", L"dll_name", g_realDllName.c_str(), name,
-            MAX_PATH, ini.c_str());
+        GetPrivateProfileStringW(L"trace", L"dll_name", g_realDllName.c_str(),
+            name, MAX_PATH, ini.c_str());
         g_realDllName = L"\\" + std::wstring(name);
-        LogCall("g_realName: %ls", g_realDllName);
+
         if(g_enabled) {
             LoggerInit(ini);
             LogCall("Proxy loaded, logging %s, dll=%ls", 

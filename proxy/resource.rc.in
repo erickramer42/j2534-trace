@@ -1,0 +1,58 @@
+// resource.rc.in — CMake generates resource.rc from this template.
+// Masquerade metadata is injected from resource_values.local.rc (gitignored).
+// Fallbacks below are deliberately neutral: nothing vendor-specific is committed.
+
+@RESOURCE_LOCAL_INCLUDE@
+
+#ifndef VER_COMPANYNAME
+#define VER_COMPANYNAME      ""
+#endif
+#ifndef VER_FILEDESCRIPTION
+#define VER_FILEDESCRIPTION  "J2534 Trace Proxy"
+#endif
+#ifndef VER_INTERNALNAME
+#define VER_INTERNALNAME     "trace.dll"
+#endif
+#ifndef VER_LEGALCOPYRIGHT
+#define VER_LEGALCOPYRIGHT   ""
+#endif
+#ifndef VER_ORIGINALFILENAME
+#define VER_ORIGINALFILENAME "trace.dll"
+#endif
+#ifndef VER_PRODUCTNAME
+#define VER_PRODUCTNAME      "J2534 Trace Proxy"
+#endif
+#ifndef VER_FILEVERSION
+#define VER_FILEVERSION      1,0,0,0
+#endif
+#ifndef VER_PRODUCTVERSION
+#define VER_PRODUCTVERSION   1,0,0,0
+#endif
+
+#define STR2(x) #x
+#define STR(x)  STR2(x)
+
+1 VERSIONINFO
+FILEVERSION    VER_FILEVERSION
+PRODUCTVERSION VER_PRODUCTVERSION
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName",      VER_COMPANYNAME
+            VALUE "FileDescription",  VER_FILEDESCRIPTION
+            VALUE "FileVersion",      STR(VER_FILEVERSION)
+            VALUE "InternalName",     VER_INTERNALNAME
+            VALUE "LegalCopyright",   VER_LEGALCOPYRIGHT
+            VALUE "OriginalFilename", VER_ORIGINALFILENAME
+            VALUE "ProductName",      VER_PRODUCTNAME
+            VALUE "ProductVersion",   STR(VER_PRODUCTVERSION)
+            VALUE "Comments",         "J2534 trace proxy"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04E4
+    END
+END
