@@ -7,7 +7,7 @@ add_library(mock_driver SHARED
 target_include_directories(mock_driver PRIVATE "${CMAKE_SOURCE_DIR}/proxy")
 
 set_target_properties(mock_driver PROPERTIES
-    OUTPUT_NAME "OBDXVX_J2534_real"
+    OUTPUT_NAME "vendor_J2534_orig"
     PREFIX ""
     SUFFIX ".dll"
     RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/test"

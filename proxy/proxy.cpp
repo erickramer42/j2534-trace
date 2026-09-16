@@ -11,6 +11,7 @@ static HMODULE g_real = NULL;
 static HMODULE g_selfModule = NULL;
 static std::wstring g_selfDir; // directory of this proxy DLL
 static bool g_enabled = true;
+static std::wstring g_realDllName = L"vendor_J2534_orig.dll"; // fallback
 
 // returns the directory containing this DLL, no trailing slash
 static const std::wstring& GetSelfDir()
@@ -28,8 +29,9 @@ static const std::wstring& GetSelfDir()
 }
 
 static HMODULE LoadRealDriver()
-{
-    std::wstring real = GetSelfDir() + L"\\OBDXVX_J2534_real.dll";
+{   
+    std::wstring real = GetSelfDir() + g_realDllName;
+    LogCall("Loading real J2534 driver: %ls", real.c_str());
     return LoadLibraryW(real.c_str());
 }
 
@@ -41,6 +43,11 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
         // [trace] enabled=0 disables frame logging
         std::wstring ini = GetSelfDir() + L"\\trace.ini";
         g_enabled = GetPrivateProfileIntW(L"trace", L"enabled", 1, ini.c_str()) != 0;
+        wchar_t name[MAX_PATH];
+        GetPrivateProfileStringW(L"trace", L"dll_name", g_realDllName.c_str(), name,
+            MAX_PATH, ini.c_str());
+        g_realDllName = L"\\" + std::wstring(name);
+        LogCall("g_realName: %ls", g_realDllName);
         if(g_enabled) {
             LoggerInit(ini);
             LogCall("Proxy loaded, logging %s, dll=%ls", 
@@ -59,7 +66,7 @@ static FARPROC Resolve(const char* name)
     if (!g_real) {
         g_real = LoadRealDriver();
         if (!g_real) {
-            LogCall("LoadLibrary failed for OBDXVX_J2534_real.dll, GLE=%lu", GetLastError());
+            LogCall("LoadLibrary failed for original J2534 driver, GLE=%lu", GetLastError());
             return NULL;
         }
     }
