@@ -11,7 +11,8 @@ static HMODULE g_real = NULL;
 static HMODULE g_selfModule = NULL;
 static std::wstring g_selfDir; // directory of this proxy DLL
 static bool g_enabled = true;
-static std::wstring g_realDllName; // name of the real J2534 DLL to load, from trace.ini
+static bool g_loadFailed = false;
+static std::wstring g_realDllSuffix; // suffix for the real J2534 DLL to load, from trace.ini
 
 // returns the directory containing this DLL, no trailing slash
 static const std::wstring& GetSelfDir()
@@ -30,7 +31,12 @@ static const std::wstring& GetSelfDir()
 
 static HMODULE LoadRealDriver()
 {   
-    std::wstring real = GetSelfDir() + g_realDllName;
+    // real driver name is derived from this proxy's name, with the suffix from trace.ini
+    wchar_t selfName[MAX_PATH];
+    GetModuleFileNameW(g_selfModule, selfName, MAX_PATH);
+    size_t dot = std::wstring(selfName).find_last_of(L'.');
+    // remove .dll extension and append suffix
+    std::wstring real = std::wstring(selfName).substr(0, dot) + g_realDllSuffix + L".dll";
     return LoadLibraryW(real.c_str());
 }
 
@@ -43,11 +49,10 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
         std::wstring ini = GetSelfDir() + L"\\trace.ini";
         g_enabled = GetPrivateProfileIntW(L"trace", L"enabled", 1, ini.c_str()) != 0;
 
-        // [trace] dll_name=vendor_J2534_orig specifies the real DLL to load
-        wchar_t name[MAX_PATH];
-        GetPrivateProfileStringW(L"trace", L"dll_name", g_realDllName.c_str(),
-            name, MAX_PATH, ini.c_str());
-        g_realDllName = L"\\" + std::wstring(name);
+        // [trace] dll_suffix=orig specifies the suffix for the real DLL to load
+        wchar_t suffix[MAX_PATH];
+        GetPrivateProfileStringW(L"trace", L"dll_suffix", L"_orig", suffix, MAX_PATH, ini.c_str());
+        g_realDllSuffix = std::wstring(suffix);
 
         if(g_enabled) {
             LoggerInit(ini);
@@ -67,7 +72,10 @@ static FARPROC Resolve(const char* name)
     if (!g_real) {
         g_real = LoadRealDriver();
         if (!g_real) {
-            LogCall("LoadLibrary failed for original J2534 driver, GLE=%lu", GetLastError());
+            if(!g_loadFailed) {
+                LogCall("LoadLibrary failed for original J2534 driver, GLE=%lu", GetLastError());
+                g_loadFailed = true; // minimize filesystem hammering on repeated failures to load library
+            }
             return NULL;
         }
     }

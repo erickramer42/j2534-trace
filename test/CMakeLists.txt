@@ -14,4 +14,6 @@ set_target_properties(mock_driver PROPERTIES
 )
 
 # Create trace.ini if missing
-file(WRITE "${CMAKE_SOURCE_DIR}/test/trace.ini" "[trace]\nenabled=1\n")
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/test/trace.ini")
+    file(WRITE "${CMAKE_SOURCE_DIR}/test/trace.ini" "[trace]\nenabled=1\ndll_suffix=_orig\n")
+endif()

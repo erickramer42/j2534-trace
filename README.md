@@ -46,7 +46,7 @@ dumpbin /headers build/proxy/trace.dll | findstr machine
 Build outputs:
 
 ```
-build/proxy/trace.dll      deployable proxy
+build/proxy/trace.dll          deployable proxy
 test/vendor_J2534.dll          proxy copy placed in the test rig
 test/vendor_J2534_orig.dll     mock driver for testing
 test/trace.ini                 [trace] enabled=1
@@ -91,7 +91,7 @@ In the target application folder:
 1. Rename the original driver:
 
    ```
-   <vendor_name>_J2534.dll  ->  <vendor_name>_J2534_real.dll
+   <vendor_name>_J2534.dll  ->  <vendor_name>_J2534_orig.dll
    ```
 
 2. Copy the built proxy in, named as the original:
@@ -129,7 +129,7 @@ Expected folder layout after deployment:
 
 ## To revert
 
-Delete the proxy copy and rename `<vendor_name>_J2534_real.dll` back to 
+Delete the proxy copy and rename `<vendor_name>_J2534_orig.dll` back to 
 `<vendor_name>_J2534.dll`. The application is then completely stock again.
 
 ## Notes
