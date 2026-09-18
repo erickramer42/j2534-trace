@@ -1,4 +1,3 @@
-traces/
 *.log
 build/
 *.obj
@@ -14,3 +13,4 @@ test/*.dll
 test/traces/
 test/*.log
 test/trace.ini
+proxy/resource_values.local.rc

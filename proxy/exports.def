@@ -1,4 +1,4 @@
-LIBRARY OBDXTrace
+LIBRARY Trace
 EXPORTS
     PassThruOpen
     PassThruClose
