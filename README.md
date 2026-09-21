@@ -1,4 +1,4 @@
-# j2534-mazda
+# j2534-trace
 
 A J2534 proxy DLL that intercepts communication between a J2534 application
 and its vehicle interface, logging all traffic to files.
