@@ -1,5 +1,8 @@
 # j2534-trace
 
+> ⚠️ **WARNING:** This software may permanently damage your vehicle.  
+> See [DISCLAIMER.md](DISCLAIMER.md) for full terms before use.
+
 A J2534 proxy DLL that intercepts communication between a J2534 application
 and its vehicle interface, logging all traffic to files.
 
@@ -57,9 +60,8 @@ test/trace.ini                 [trace] enabled=1
 Run the harness after building:
 
 ```
-py -3.12 test\harness.py
-        or
-py -3.12 test/harness.py (if using unix based directory structure e.g. MINGW64, git bash, etc)
+py -3.12 test/harness.py
+
 ```
 
 Checks performed:
