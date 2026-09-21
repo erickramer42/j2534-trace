@@ -1,0 +1,23 @@
+j2534-trace
+Copyright 2025-2026 Eric Kramer
+
+This software is provided for diagnostic and interoperability research ONLY.
+
+WARNING: Use may permanently damage your vehicle. Incorrect ECU writes can:
+  - Corrupt firmware ("brick" ECUs)
+  - Damage engine or transmission systems
+  - Disable safety features (ABS, TCS, stability control)
+
+Regulatory notice: ECU modification may violate emissions regulations
+(40 CFR Part 86 in the US). This tool is NOT intended to circumvent
+emission controls or compliance requirements.
+
+Warranty notice: Unauthorized modifications may void powertrain warranties.
+
+THE AUTHORS DISCLAIM ALL LIABILITY FOR VEHICLE DAMAGE, DOWNTIME, OR LEGAL
+CONSEQUENCES ARISING FROM USE OF THIS SOFTWARE.
+
+NOTES:
+- Proxy layer (proxy/) is transparent passthrough instrumentation
+- Does not modify or generate diagnostic traffic on its own
+- Research use only; production tuning requires manufacturer authorization
