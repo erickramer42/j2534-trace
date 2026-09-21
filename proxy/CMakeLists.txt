@@ -23,6 +23,10 @@ add_library(proxy_dll SHARED
 
 target_include_directories(proxy_dll PUBLIC ".")
 
+if(MSVC)
+    target_compile_options(proxy_dll PRIVATE /W4)
+endif()
+
 set_target_properties(proxy_dll PROPERTIES
     OUTPUT_NAME "trace"
     PREFIX ""

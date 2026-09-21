@@ -84,7 +84,7 @@ def main():
 
     # 1. banner
     t = log_text()
-    check("banner + log file created", "Proxy loaded, logging ENABLED" in t, t[:200])
+    check("banner + log file created", "Proxy loaded, logging enabled" in t, t[:200])
 
     # 2. open / version / connect / filter
     dev = c_ulong(0)
@@ -100,7 +100,7 @@ def main():
     for m in (mask, pat):
         m.Data[0] = 0x07; m.Data[1] = 0xE0
     fid = c_ulong(0)
-    check("StartMsgFilter", lib.PassThruStartMsgFilter(ch, 1, byref(mask), byref(pat),
+    check("PassThruStartMsgFilter", lib.PassThruStartMsgFilter(ch, 1, byref(mask), byref(pat),
                                                         byref(fc), byref(fid)) == 0 and fid.value >= 1)
 
     # 3. UDS echo round-trip
@@ -205,7 +205,7 @@ def main():
     check("Error code propagate", rc != 0 and "ch=999" in log_text()[-500:],
           "invalid channel call should return error and log channel number")
 
-    # 13. HexBytes logging: concurrent StartMsgFilter calls
+    # 13. HexBytes logging: concurrent PassThruStartMsgFilter calls
     log_before = len(log_text())
 
     def filter_worker(tid, results):
@@ -230,7 +230,7 @@ def main():
 
     trip = re.compile(r"mask=\[([0-9A-F ]*)\] pattern=\[([0-9A-F ]*)\] fc=\[([0-9A-F ]*)\]")
     new_lines = [l for l in log_text()[log_before:].splitlines()
-                if "StartMsgFilter" in l]
+                if "PassThruStartMsgFilter" in l]
     bad = []
     for l in new_lines:
         m = trip.search(l)
@@ -240,7 +240,7 @@ def main():
     check("concurrent filters log correct data",
         all(v == "ok" for v in results.values()) and
         len(new_lines) >= 800 and not bad,
-        "concurrent StartMsgFilter calls must log matching mask/pattern/fc triples")
+        "concurrent PassThruStartMsgFilter calls must log matching mask/pattern/fc triples")
 
     failed = [n for n, ok in RESULTS if not ok]
     print("\n%d/%d checks passed" % (len(RESULTS) - len(failed), len(RESULTS)))
