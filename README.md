@@ -54,12 +54,11 @@ test/trace.ini                 [trace] enabled=1
 
 ## Test
 
-Run the harness after building:
+To run tests after building:
 
 ```
-py -3.12 test\harness.py
-        or
-py -3.12 test/harness.py (if using unix based directory structure e.g. MINGW64, git bash, etc)
+py -3.12 test/harness.py
+
 ```
 
 Checks performed:
