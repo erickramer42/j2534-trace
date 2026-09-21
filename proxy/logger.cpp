@@ -15,6 +15,14 @@ static FILE*  g_file = NULL;
 static LARGE_INTEGER g_freq, g_last; // log delta time between frames 
 static bool g_perf_init = false;
 
+// flush policy: 0 => flush after every log write (default, max capture fidelity)
+static long g_flushMs = 0;
+// refuse to start logging below this much free space (MB), fail open
+static unsigned long long g_minFreeMB = 200;
+static bool g_loggerDead = false; // set after fatal IO error or low disk
+static LARGE_INTEGER g_lastFlush;
+static bool g_lastFlushInit = false;
+
 void LoggerInit(const std::wstring& iniPath)
 {
     if (!g_mutex) g_mutex = CreateMutexA(NULL, FALSE, NULL);
@@ -25,6 +33,9 @@ void LoggerInit(const std::wstring& iniPath)
         g_perf_init = true;
     }
 
+    g_flushMs = (long)GetPrivateProfileIntW(L"trace", L"flush_ms", 0, iniPath.c_str());
+    g_minFreeMB = GetPrivateProfileIntW(L"trace", L"min_free_mb", 200, iniPath.c_str());
+
     std::wstring selfDir(iniPath);
     size_t slash = selfDir.find_last_of(L'\\');
     if (slash != std::wstring::npos) selfDir.resize(slash);
@@ -34,9 +45,28 @@ void LoggerInit(const std::wstring& iniPath)
     g_traceDir += L"\\";
 }
 
+// kill logger if disk full or other IO issue
+static void KillLoggerLocked(const char* why)
+{
+    if (g_file) { fclose(g_file); g_file = NULL; }
+    g_loggerDead = true; 
+    OutputDebugStringA(why); // no file - use debugger channel
+}
+
 static void OpenLogFileLocked()
 {
-    if (g_file) return;
+    if (g_file || g_loggerDead) return;
+
+    // free-space check, avoids a potential mid-flash failure. Fail open = keep forwarding, no log.
+    ULARGE_INTEGER freeBytes = {};
+    if (GetDiskFreeSpaceExW(g_traceDir.c_str(), &freeBytes, NULL, NULL)) {
+        unsigned long long freeMB = freeBytes.QuadPart / (1024ull * 1024ull);
+        if (freeMB < g_minFreeMB) {
+            KillLoggerLocked("j2534-trace: low disk space, logging disabled (proxy continues)");
+            return;
+        }
+    }
+
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t wpath[MAX_PATH];
     swprintf(wpath, MAX_PATH,
@@ -46,12 +76,34 @@ static void OpenLogFileLocked()
     g_file = _wfsopen(wpath, L"w", _SH_DENYNO);
 }
 
+static void MaybeFlushLocked()
+{
+    if (!g_file) return;
+    if (g_flushMs <= 0) {                     // default: flush every write
+        if (fflush(g_file) != 0)
+            KillLoggerLocked("j2534-trace: fflush failed, logging disabled");
+        return;
+    }
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    double ms = g_lastFlushInit
+        ? (now.QuadPart - g_lastFlush.QuadPart) * 1000.0 / g_freq.QuadPart
+        : 1e9;                                // first write after init always flushes
+    if (ms >= (double)g_flushMs) {
+        if (fflush(g_file) != 0) {
+            KillLoggerLocked("j2534-trace: fflush failed, logging disabled");
+            return;
+        }
+        g_lastFlush = now;
+        g_lastFlushInit = true;
+    }
+}
+
 static void LogTimestamp(FILE* file)
 {
     SYSTEMTIME st; GetLocalTime(&st);
     fprintf(file, "[%02d:%02d:%02d.%03d",
             st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    
     if (g_perf_init) {
         LARGE_INTEGER now;
         QueryPerformanceCounter(&now);
@@ -59,13 +111,13 @@ static void LogTimestamp(FILE* file)
         fprintf(file, " +%06.0fus", us);
         g_last = now;
     }
-    
+
     fprintf(file, "] ");
 }
 
 void LogCall(const char* fmt, ...)
 {
-    if (!g_mutex) return;
+    if (!g_mutex || g_loggerDead) return;
     WaitForSingleObject(g_mutex, INFINITE);
     OpenLogFileLocked();
     if (g_file) {
@@ -74,7 +126,7 @@ void LogCall(const char* fmt, ...)
         vfprintf(g_file, fmt, ap);
         va_end(ap);
         fprintf(g_file, "\n");
-        fflush(g_file);
+        MaybeFlushLocked();
     }
     ReleaseMutex(g_mutex);
 }
@@ -82,19 +134,18 @@ void LogCall(const char* fmt, ...)
 void LogMsgs(const char* dir, unsigned long channelId,
              const PASSTHRU_MSG* msgs, unsigned long count, bool suspect)
 {
-    if (!g_mutex) return;
+    if (!g_mutex || g_loggerDead) return;
     WaitForSingleObject(g_mutex, INFINITE);
     OpenLogFileLocked();
     if (g_file) {
         for (unsigned long i = 0; i < count; ++i) {
             const PASSTHRU_MSG* m = &msgs[i];
 
-            // Sanity clamp with flag
             bool is_bad_size = (m->DataSize > 4128) || (m->ExtraDataIndex > m->DataSize);
             if (suspect || is_bad_size) {
                 fprintf(g_file, "  [SUSPECT] ");
             }
-            
+
             char hex[DATA_CAP * 3 + 1]; // one big line, built then written once
             size_t pos = 0;
             unsigned long n = m->DataSize < DATA_CAP ? m->DataSize : DATA_CAP;
@@ -108,7 +159,7 @@ void LogMsgs(const char* dir, unsigned long channelId,
                     dir, channelId, m->ProtocolID, m->TxFlags, m->RxStatus,
                     m->Timestamp, m->DataSize, m->ExtraDataIndex, (int)pos, hex);
         }
-        fflush(g_file);
+        MaybeFlushLocked();
     }
     ReleaseMutex(g_mutex);
 }
