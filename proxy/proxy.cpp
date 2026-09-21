@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <string>
 #include <unordered_map>
+#include <mutex>
 
 #include "logger.h"
 
@@ -56,8 +57,7 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
 
         if(g_enabled) {
             LoggerInit(ini);
-            LogCall("Proxy loaded, logging %s, dll=%ls", 
-                    g_enabled ? "ENABLED" : "disabled", GetSelfDir().c_str());
+            LogCall("Proxy loaded, logging enabled, dll=%ls", GetSelfDir().c_str());
         }
     }
     return TRUE;
@@ -65,20 +65,25 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID)
 
 static FARPROC Resolve(const char* name)
 {
+    static std::mutex resolveLock;
     static std::unordered_map<std::string, FARPROC> cache;
+
+    std::lock_guard<std::mutex> lock(resolveLock);
+
     auto it = cache.find(name);
     if (it != cache.end()) return it->second;
 
     if (!g_real) {
         g_real = LoadRealDriver();
         if (!g_real) {
-            if(!g_loadFailed) {
+            if (!g_loadFailed) {
                 LogCall("LoadLibrary failed for original J2534 driver, GLE=%lu", GetLastError());
-                g_loadFailed = true; // minimize filesystem hammering on repeated failures to load library
+                g_loadFailed = true; // log once, not per-call
             }
             return NULL;
         }
     }
+
     FARPROC fn = GetProcAddress(g_real, name);
     cache[name] = fn;
     if (!fn) LogCall("GetProcAddress failed for '%s'", name);
@@ -94,8 +99,11 @@ PassThruOpen(const char* pName, unsigned long* pDeviceID)
     Fn f = (Fn)Resolve("PassThruOpen");
     if (!f) return 0xE2; // ERR_NOT_SUPPORTED
     long r = f(pName, pDeviceID);
-    LogCall("PassThruOpen(name='%s') -> %ld deviceId=%lu",
-            pName ? pName : "", r, pDeviceID ? *pDeviceID : 0);
+    if (r == STATUS_NOERROR)
+        LogCall("PassThruOpen(name='%s') -> %ld deviceId=%lu",
+                pName ? pName : "", r, pDeviceID ? *pDeviceID : 0);
+    else
+        LogCall("PassThruOpen(name='%s') -> %ld", pName ? pName : "", r);
 
     // warm cache eagerly, to prevent two threads from racing and corrupting the cache map
     Resolve("PassThruClose");
@@ -173,10 +181,11 @@ PassThruWriteMsgs(unsigned long ChannelID, PASSTHRU_MSG* pMsg, unsigned long* pN
     typedef long(__stdcall *Fn)(unsigned long, PASSTHRU_MSG*, unsigned long*, unsigned long);
     Fn f = (Fn)Resolve("PassThruWriteMsgs");
     if (!f) return 0xE2; // ERR_NOT_SUPPORTED
-    if (pNumMsgs && *pNumMsgs > 0)
+    if (g_enabled && pNumMsgs && *pNumMsgs > 0)
         LogMsgs("TX", ChannelID, pMsg, *pNumMsgs, pMsg->DataSize > 4128);
     long r = f(ChannelID, pMsg, pNumMsgs, Timeout);
-    LogCall("PassThruWriteMsgs(ch=%lu timeout=%lu) -> %ld", ChannelID, Timeout, r);
+    if (g_enabled)
+        LogCall("PassThruWriteMsgs(ch=%lu timeout=%lu) -> %ld", ChannelID, Timeout, r);
     return r;
 }
 
@@ -213,7 +222,7 @@ PassThruStartMsgFilter(unsigned long ChannelID, unsigned long FilterType,
     Fn f = (Fn)Resolve("PassThruStartMsgFilter");
     if (!f) return 0xE2; // ERR_NOT_SUPPORTED
     long r = f(ChannelID, FilterType, pMaskMsg, pPatternMsg, pFlowControlMsg, pFilterID);
-    LogCall("StartMsgFilter(ch=%lu type=0x%lX mask=[%s] pattern=[%s] fc=[%s]) -> %ld filterID=%lu",
+    LogCall("PassThruStartMsgFilter(ch=%lu type=0x%lX mask=[%s] pattern=[%s] fc=[%s]) -> %ld filterID=%lu",
             ChannelID, FilterType,
             pMaskMsg ? HexBytes(*pMaskMsg) : "",
             pPatternMsg ? HexBytes(*pPatternMsg) : "",
@@ -284,6 +293,17 @@ PassThruGetLastError(char* pErrorDescription)
     return r;
 }
 
+static void LogSconfigList(const char* which, void* p)
+{
+    if (!p) return;
+    SCONFIG_LIST* list = (SCONFIG_LIST*)p;
+    if (!list->ConfigPtr || list->NumOfParams == 0) return;
+    unsigned long n = list->NumOfParams < 64 ? list->NumOfParams : 64;  // cap to spec-plausible range
+    for (unsigned long i = 0; i < n; ++i)
+        LogCall("  %s param=0x%lX value=0x%lX", which,
+                list->ConfigPtr[i].Parameter, list->ConfigPtr[i].Value);
+}
+
 __declspec(dllexport) long __stdcall
 PassThruIoctl(unsigned long HandleID, unsigned long IoctlID,
               void* pInput, void* pOutput)
@@ -295,16 +315,10 @@ PassThruIoctl(unsigned long HandleID, unsigned long IoctlID,
 
     LogCall("Ioctl(handle=%lu id=0x%lX) -> %ld", HandleID, IoctlID, r);
     if (IoctlID == 0x02 && pInput) {            // SET_CONFIG: params inbound
-        SCONFIG_LIST* list = (SCONFIG_LIST*)pInput;
-        for (unsigned long i = 0; i < list->NumOfParams; ++i)
-            LogCall("  SET_CONFIG param=0x%lX value=0x%lX",
-                    list->ConfigPtr[i].Parameter, list->ConfigPtr[i].Value);
+        LogSconfigList("SET_CONFIG", pInput);
     }
     if (IoctlID == 0x01 && pOutput) {            // GET_CONFIG: results land in pOutput
-        SCONFIG_LIST* list = (SCONFIG_LIST*)pOutput;
-        for (unsigned long i = 0; i < list->NumOfParams; ++i)
-            LogCall("  GET_CONFIG param=0x%lX value=0x%lX",
-                    list->ConfigPtr[i].Parameter, list->ConfigPtr[i].Value);
+        LogSconfigList("GET_CONFIG", pOutput);
     }
     return r;
 }

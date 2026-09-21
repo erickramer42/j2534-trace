@@ -6,6 +6,10 @@ add_library(mock_driver SHARED
 
 target_include_directories(mock_driver PRIVATE "${CMAKE_SOURCE_DIR}/proxy")
 
+if(MSVC)
+    target_compile_options(proxy_dll PRIVATE /W4)
+endif()
+
 set_target_properties(mock_driver PROPERTIES
     OUTPUT_NAME "vendor_J2534_orig"
     PREFIX ""

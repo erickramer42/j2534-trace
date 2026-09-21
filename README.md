@@ -61,7 +61,6 @@ To run tests after building:
 
 ```
 py -3.12 test/harness.py
-
 ```
 
 Checks performed:
