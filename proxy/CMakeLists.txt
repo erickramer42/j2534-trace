@@ -27,6 +27,8 @@ if(MSVC)
     target_compile_options(proxy_dll PRIVATE /W4)
 endif()
 
+set_property(TARGET proxy_dll PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")
+
 set_target_properties(proxy_dll PROPERTIES
     OUTPUT_NAME "trace"
     PREFIX ""
