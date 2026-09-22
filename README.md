@@ -63,23 +63,28 @@ To run tests after building:
 py -3.12 test/harness.py
 ```
 
-Checks performed:
+Checks performed (20 total, numbered in output):
 
-1. Banner and log file created
-2. API round trips (Open, ReadVersion, Connect, StartMsgFilter)
-3. UDS echo (TX/RX with intact hex)
-4. Large payload (3000 bytes logged in full)
-5. Timeout path (error return, no data logged)
-6. Unresolved export (returns 0xE2, no crash)
-7. Ioctl SET/GET_CONFIG round trip
-8. Thread stress (3 workers, no torn log lines)
-9. Disabled mode (enabled=0, no trace file, calls still work)
-10. Missing real DLL (graceful 0xE2 failure, no crash)
-11. Periodic message logged (StartPeriodicMsg traffic reaches the log)
-12. Error code propagation (invalid channel returns 0xC1, logged)
+| # | Check | Covers |
+|---|-------|--------|
+| 1 | banner + log file created | Logger init on DLL load |
+| 2–5 | Open / ReadVersion / Connect / StartMsgFilter | Basic API round trips |
+| 6–7 | UDS echo TX/RX logged | Write/read capture with intact hex |
+| 8 | 3000-byte payload fully logged | No truncation on large messages |
+| 9 | timeout path | Error return, no phantom RX logged |
+| 10 | unresolved export | Missing export → 0xE2, logged, no crash |
+| 11–12 | Ioctl SET/GET_CONFIG decode | SCONFIG round-trip |
+| 13 | thread stress | 3 workers, no torn log lines |
+| 14 | disabled mode | enabled=0 → no trace file, calls succeed |
+| 15 | missing real DLL | Graceful 0xE2 failure, no crash |
+| 16 | periodic message logging | StartPeriodicMsg traffic logged |
+| 17 | error code propagation | Invalid channel error returned + logged |
+| 18 | concurrent filters | 4 threads × 200 filters, correct data each |
+| 19 | logging latency < 2ms/call | Measured overhead of enabled logging |
+| 20 | low-disk guard | min_free_mb → fail open, no trace file |
 
-Exit code 0 means all passed. Failures print with FAIL and the exit code
-is 1.
+Exit code 0 means all passed. Failures print as `FAIL #N: <name>` with
+the failing check number.
 
 Limitation: the harness validates proxy plumbing (logging, threading,
 error handling, path resolution). It cannot validate the ABI against the
@@ -106,6 +111,18 @@ In the target application folder:
    ```ini
    [trace]
    enabled=1
+   ; dll_suffix: suffix appended to the proxy's own filename to find the
+   ; real driver (default _orig). Only set this if you renamed differently.
+   dll_suffix=_orig
+   ; flush_ms: 0 = flush after every log line (default, max fidelity).
+   ; Higher values (e.g. 250) reduce disk sync overhead during
+   ; latency-sensitive sessions, at the cost of losing the un-flushed
+   ; tail if the host process dies.
+   flush_ms=0
+   ; min_free_mb: logging refuses to start below this much free disk
+   ; space (default 200). Fail-open: the proxy keeps forwarding traffic,
+   ; just without logging.
+   min_free_mb=200
    ```
 
 Set `enabled=0` to disable logging without removing the proxy.
@@ -149,9 +166,16 @@ Delete the proxy copy and rename `<vendor_name>_J2534_orig.dll` back to
   material from your ECU.
 - Generated test artifacts (`*.dll`, `traces/`, `trace.ini`) are gitignored.
   The test rig is rebuilt by CMake and never committed.
-- The proxy carries a version resource (`proxy/resource.rc`) mirroring the
-  original driver's metadata. The target application validates this and
-  rejects DLLs with blank or missing version info ("not supported").
-  If the target driver version changes, update FILEVERSION/PRODUCTVERSION
-  and the string values in `proxy/resource.rc` to match, or the same check
-  fails again.
+- The proxy's version resource is generated at build time from
+  `proxy/resource.rc.in`. Vendor-mimicking values live in
+  `proxy/resource_values.local.rc`, which is **gitignored** — if the
+  target app validates driver version info and rejects mismatched DLLs
+  ("not supported"), regenerate that file from the current vendor DLL's
+  metadata and rebuild. The absence of the local file builds neutral
+  version info.
+- If any log write fails mid-session (disk full being the realistic
+  case), logging shuts down permanently for that process and the proxy
+  continues forwarding without capture — a lost log is recoverable, a
+  stalled call path during a flash session is not.
+- The proxy build enables MSVC /W4; fix or consciously accept any new
+  warning rather than suppressing it.

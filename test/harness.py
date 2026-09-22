@@ -20,10 +20,14 @@ REAL_DLL   = os.path.join(TEST_DIR, "vendor_J2534_orig.dll")
 TRACE_INI  = os.path.join(TEST_DIR, "trace.ini")
 TRACES_DIR = os.path.join(TEST_DIR, "traces")
 
+CHECK_NUM = 0
 RESULTS = []
 def check(name, cond, detail=""):
+    global CHECK_NUM
+    CHECK_NUM += 1
     RESULTS.append((name, bool(cond)))
-    print(("PASS " if cond else "FAIL ") + name + ("" if cond else "  :: " + detail))
+    status = "PASS" if cond else "FAIL"
+    print(f"{status} #{CHECK_NUM}: {name}" + ("" if cond else f"  :: {detail}"))
 
 class PASSTHRU_MSG(ctypes.Structure):
     _fields_ = [("ProtocolID", c_ulong), ("RxStatus", c_ulong),
@@ -86,7 +90,7 @@ def main():
     t = log_text()
     check("banner + log file created", "Proxy loaded, logging enabled" in t, t[:200])
 
-    # 2. open / version / connect / filter
+    # 2. open / 3. version / 4. connect / 5. filter
     dev = c_ulong(0)
     check("PassThruOpen", lib.PassThruOpen(None, byref(dev)) == 0 and dev.value == 1)
     fw, dll, api = (create_string_buffer(80) for _ in range(3))
@@ -103,7 +107,7 @@ def main():
     check("PassThruStartMsgFilter", lib.PassThruStartMsgFilter(ch, 1, byref(mask), byref(pat),
                                                         byref(fc), byref(fid)) == 0 and fid.value >= 1)
 
-    # 3. UDS echo round-trip
+    # 6. Write , 7. Read - UDS echo round-trip 
     num = c_ulong(1)
     lib.PassThruWriteMsgs(ch, byref(make_msg(6, [0x10, 0x03])), byref(num), 1000)
     lib.PassThruReadMsgs(ch, byref(make_msg(6, [0])), byref(num), 1000)
@@ -111,7 +115,7 @@ def main():
     check("TX request logged", "10 03" in t)
     check("RX positive echo logged", "50 03" in t)
 
-    # 4. large payload — full 3000 bytes, no truncation
+    # 8. large payload — full 3000 bytes, no truncation
     rnd = random.Random(42)
     payload = bytes(rnd.randrange(256) for _ in range(3000))
     lib.PassThruWriteMsgs(ch, byref(make_msg(6, payload)), byref(num), 1000)
@@ -121,7 +125,7 @@ def main():
     check("3000-byte payload fully logged", len(tok) == 3000 and "..." not in big[-1],
           "tokens=%d" % len(tok))
 
-    # 5. drain queue, then timeout: num=0, NO new RX line
+    # 9. drain queue, then timeout: num=0, NO new RX line
     while True:
         num.value = 1
         if lib.PassThruReadMsgs(ch, byref(PASSTHRU_MSG()), byref(num), 10) != 0:
@@ -132,14 +136,14 @@ def main():
     check("timeout: rc!=0, num=0, no RX logged",
           rc != 0 and num.value == 0 and log_text().count("MSG RX") == rx_before)
 
-    # 6. unresolved export (mock omits ReadVoltage)
+    # 10. unresolved export (mock omits ReadVoltage)
     v = c_ulong(0)
     rc = lib.PassThruReadVoltage(dev, byref(v))
     t = log_text()
     check("unresolved export returns 0xE2, logged, no crash",
           rc == 0xE2 and "GetProcAddress failed for 'PassThruReadVoltage'" in t)
 
-    # 7. Ioctl SET/GET round-trip via mock store
+    # 11. SET , 12. GET - Ioctl SET/GET round-trip via mock store
     params = (SCONFIG * 1)()
     params[0].Parameter, params[0].Value = 0x02, 1          # loopback param id
     slist = SCONFIG_LIST(1, params)
@@ -149,7 +153,7 @@ def main():
     check("SET_CONFIG decoded in log", "SET_CONFIG param=0x2 value=0x1" in t)
     check("GET_CONFIG decoded in log", "GET_CONFIG param=0x2 value=0x1" in t)
 
-    # 8. thread stress — no torn lines
+    # 13. thread stress — no torn lines
     def worker():
         ln = c_ulong(1)
         for _ in range(200):
@@ -163,7 +167,7 @@ def main():
 
     lib.PassThruClose(dev)
 
-    # 9. disabled mode: subprocess loads with enabled=0, no new trace file
+    # 14. disabled mode: subprocess loads with enabled=0, no new trace file
     saved_ini = open(TRACE_INI, "r").read() if os.path.exists(TRACE_INI) else None
     try:
         with open(TRACE_INI, "w") as f: f.write("[trace]\nenabled=0\ndll_suffix=_orig\n")
@@ -175,7 +179,7 @@ def main():
         if saved_ini is not None:
             with open(TRACE_INI, "w") as f: f.write(saved_ini)
 
-    # 10. missing real DLL: graceful failure
+    # 15. missing real DLL: graceful failure
     try:
         os.rename(REAL_DLL, REAL_DLL + ".bak")
         code = ("import ctypes;from ctypes import byref,c_ulong;"
@@ -187,7 +191,7 @@ def main():
     finally:
         os.rename(REAL_DLL + ".bak", REAL_DLL)
         
-    # 11. Periodic message logging
+    # 16. Periodic message logging
     periodic = make_msg(6, [0x03, 0x00])
     num.value = 1
     rc = lib.PassThruStartPeriodicMsg(ch, byref(periodic), byref(c_ulong(0)), 100)
@@ -197,7 +201,7 @@ def main():
     check("Periodic message logged", "MSG PERIODIC" in t or "txflags=0x0" in t,
           "periodic msg should appear in log")
     
-    # 12. Error code propagation
+    # 17. Error code propagation
     lib.PassThruClose(dev)
     lib.PassThruConnect(dev, 6, 0, 500000, byref(ch))  # reopen channel then attempt bogus write
     rc = lib.PassThruWriteMsgs(c_ulong(999), byref(make_msg(6, [0])), byref(num), 100)
@@ -205,7 +209,7 @@ def main():
     check("Error code propagate", rc != 0 and "ch=999" in log_text()[-500:],
           "invalid channel call should return error and log channel number")
 
-    # 13. HexBytes logging: concurrent PassThruStartMsgFilter calls
+    # 18. HexBytes logging: concurrent PassThruStartMsgFilter calls
     log_before = len(log_text())
 
     def filter_worker(tid, results):
@@ -241,6 +245,55 @@ def main():
         all(v == "ok" for v in results.values()) and
         len(new_lines) >= 800 and not bad,
         "concurrent PassThruStartMsgFilter calls must log matching mask/pattern/fc triples")
+
+    # 19. logging latency: enabled logging must not add pathological
+    # per-call overhead (fflush on every line). Compares a timed ioctl
+    # loop with logging on vs off.
+    def latency_probe(enabled, iters=400):
+        with open(TRACE_INI, "w") as f:
+            f.write("[trace]\nenabled=%d\ndll_suffix=_orig\n" % enabled)
+        code = ("import ctypes,time\n"
+                "from ctypes import byref, c_ulong\n"
+                "lib = ctypes.CDLL(r'%s')\n"
+                "d = c_ulong(0)\n"
+                "lib.PassThruOpen(None, byref(d))\n"
+                "t0 = time.perf_counter()\n"
+                "for _ in range(%d):\n"
+                "    lib.PassThruIoctl(d, 5, None, None)\n"   # CLEAR_RX_QUEUE: no params, mock returns 0
+                "print('LAT %%.6f' %% (time.perf_counter() - t0))\n"
+                ) % (PROXY_DLL, iters)
+        r = subprocess.run([sys.executable, "-c", code],
+                           capture_output=True, text=True)
+        for line in r.stdout.splitlines():
+            if line.startswith("LAT "):
+                return float(line[4:])
+        return None
+
+    saved_ini = open(TRACE_INI).read() if os.path.exists(TRACE_INI) else None
+    try:
+        t_off = latency_probe(0)
+        t_on  = latency_probe(1)
+        per_call_ms = ((t_on - t_off) / 400) * 1000 if (t_off is not None and t_on is not None) else None
+        check("logging latency < 2ms per logged call",
+              per_call_ms is not None and per_call_ms < 2.0,
+              "on=%.3fs off=%.3fs => %.3f ms/call" %
+              (t_on or -1, t_off or -1, per_call_ms or -1))
+    finally:
+        if saved_ini is not None:
+            with open(TRACE_INI, "w") as f: f.write(saved_ini)
+
+    # 20. low-disk guard: min_free_mb beyond reality => no log file,
+    # calls still succeed (fail open)
+    try:
+        with open(TRACE_INI, "w") as f:
+            f.write("[trace]\nenabled=1\ndll_suffix=_orig\nmin_free_mb=999999999\n")
+        before = set(glob.glob(os.path.join(TRACES_DIR, "*.log")))
+        subproc_probe("lib.PassThruOpen(None,byref(c_ulong()));lib.PassThruClose(1)")
+        after = set(glob.glob(os.path.join(TRACES_DIR, "*.log")))
+        check("low-disk guard: no trace file, calls still succeed", before == after)
+    finally:
+        if saved_ini is not None:
+            with open(TRACE_INI, "w") as f: f.write(saved_ini)
 
     failed = [n for n, ok in RESULTS if not ok]
     print("\n%d/%d checks passed" % (len(RESULTS) - len(failed), len(RESULTS)))
