@@ -57,7 +57,6 @@ static void OpenLogFileLocked()
 {
     if (g_file || g_loggerDead) return;
 
-    // free-space check, avoids a potential mid-flash failure. Fail open = keep forwarding, no log.
     ULARGE_INTEGER freeBytes = {};
     if (GetDiskFreeSpaceExW(g_traceDir.c_str(), &freeBytes, NULL, NULL)) {
         unsigned long long freeMB = freeBytes.QuadPart / (1024ull * 1024ull);
@@ -69,11 +68,30 @@ static void OpenLogFileLocked()
 
     SYSTEMTIME st; GetLocalTime(&st);
     wchar_t wpath[MAX_PATH];
+
+    // Primary: self dir (co-located with the captured DLLs).
     swprintf(wpath, MAX_PATH,
         L"%strace_%04d%02d%02d_%02d%02d%02d_%03d_pid%lu.log",
         g_traceDir.c_str(), st.wYear, st.wMonth, st.wDay, st.wHour,
         st.wMinute, st.wSecond, st.wMilliseconds, GetCurrentProcessId());
     g_file = _wfsopen(wpath, L"w", _SH_DENYNO);
+
+    if (!g_file) {
+        // Self dir not writable (e.g. proxy deployed into Program Files without
+        // elevation). Fall back to %TEMP% so we never lose the trace silently.
+        wchar_t tmpDir[MAX_PATH];
+        if (GetTempPathW(MAX_PATH, tmpDir)) {
+            std::wstring altDir = std::wstring(tmpDir) + L"j2534-trace\\";
+            CreateDirectoryW(altDir.c_str(), NULL);
+            swprintf(wpath, MAX_PATH,
+                L"%strace_%04d%02d%02d_%02d%02d%02d_%03d_pid%lu.log",
+                altDir.c_str(), st.wYear, st.wMonth, st.wDay, st.wHour,
+                st.wMinute, st.wSecond, st.wMilliseconds, GetCurrentProcessId());
+            g_file = _wfsopen(wpath, L"w", _SH_DENYNO);
+        }
+    }
+    if (!g_file)
+        KillLoggerLocked("j2534-trace: log file creation failed everywhere (self dir + TEMP), logging disabled");
 }
 
 static void MaybeFlushLocked()

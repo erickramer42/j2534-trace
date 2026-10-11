@@ -295,6 +295,23 @@ def main():
         if saved_ini is not None:
             with open(TRACE_INI, "w") as f: f.write(saved_ini)
 
+    # 21. TEMP fallback: traces dir write-denied => log lands in %TEMP%\j2534-trace\
+    import tempfile
+    tmp_trace_dir = os.path.join(tempfile.gettempdir(), "j2534-trace")
+    try:
+        subprocess.run(["icacls", TRACES_DIR, "/deny",
+                        f"{os.environ.get('USERNAME')}:W"],
+                       capture_output=True)
+        before_tmp = set(glob.glob(os.path.join(tmp_trace_dir, "*.log")))
+        subproc_probe("lib.PassThruOpen(None,byref(c_ulong()));lib.PassThruClose(1)")
+        after_tmp = set(glob.glob(os.path.join(tmp_trace_dir, "*.log")))
+        check("TEMP fallback: log written to %TEMP%\\j2534-trace when self dir denied",
+              len(after_tmp - before_tmp) == 1)
+    finally:
+        subprocess.run(["icacls", TRACES_DIR, "/remove:d",
+                       f"{os.environ.get('USERNAME')}:W"],
+                      capture_output=True)
+
     failed = [n for n, ok in RESULTS if not ok]
     print("\n%d/%d checks passed" % (len(RESULTS) - len(failed), len(RESULTS)))
     sys.exit(1 if failed else 0)
