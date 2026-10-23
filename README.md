@@ -1,181 +1,167 @@
 # j2534-trace
 
+A transparent logging proxy for the SAE J2534 pass-thru API. It installs in
+place of a vendor's J2534 driver DLL, forwards every call to the real driver
+unchanged, and writes a timestamped trace of each call, its return code, and
+the full message payload.
+
 > ⚠️ **WARNING:** This software may permanently damage your vehicle.  
 > See [DISCLAIMER.md](DISCLAIMER.md) for full terms before use.
 
-A J2534 proxy DLL that intercepts communication between a J2534 application
-and its vehicle interface, logging all traffic to files.
+**Status: paused.** The proxy, logger, and 20-check test harness are
+complete and passing.
 
-## Requirements
+**Stack:** C++17 · Win32 API · MSVC · CMake · Python (ctypes) test harness
 
-- Visual Studio 2019 or newer Build Tools (Desktop C++ workload).
-  Tested with VS2019, VS2022, and VS2026 toolsets. Any MSVC toolchain
-  since VS2015 produces ABI-compatible binaries (vcruntime140).
-- CMake 3.24 or newer (needed for `--fresh` and current VS generator
-  strings; 3.20 works with older generators)
-- 32-bit Python for the test harness (the DLLs are Win32/x86)
+## The problem
 
-Check your Python bitness (must print 32):
+J2534 is the standard Windows API that vehicle diagnostic and ECU
+programming applications use to reach vehicle hardware. The application loads
+a vendor-supplied driver DLL and calls its `PassThru*` functions. Both sides
+are usually closed source, so there is no direct way to see what a session
+actually sent, in what order, or with what timing.
+
+j2534-trace sits at that DLL boundary. The application loads the proxy as if
+it were the vendor driver, and the proxy loads the real driver and passes
+every call through. Neither the application nor the interface needs to
+change.
+
+```mermaid
+flowchart LR
+    A[J2534 application] -->|"PassThru* calls"| P["vendor_J2534.dll<br/>(j2534-trace proxy)"]
+    P -->|"forwarded unchanged"| R["vendor_J2534_orig.dll<br/>(real driver)"]
+    R --> D[Pass-thru device] --> V[Vehicle]
+    P -.->|"calls, return codes,<br/>payloads, µs timing"| L[("traces/*.log")]
+```
+
+## How it works
+
+- **DLL proxying by filename.** The proxy is deployed under the vendor
+  driver's filename and exports the same 15 `PassThru*` functions
+  (`__stdcall`, undecorated names via a `.def` file). It finds the real
+  driver by taking its own module path and appending a configurable suffix
+  (`_orig` by default).
+- **Lazy, cached resolution.** Each export resolves its target through a
+  mutex-guarded `GetProcAddress` cache, so the real driver isn't loaded until
+  the first call ([proxy.cpp](proxy/proxy.cpp)).
+- **Capture points chosen per direction.** TX payloads are logged before the
+  call is forwarded, so they are on disk even if the driver hangs. RX
+  payloads are logged only after a successful `ReadMsgs`, so a timeout never
+  produces a phantom frame.
+- **Config at load time.** `trace.ini` next to the DLL is read in `DllMain`.
+  It controls logging on/off, the real-driver suffix, the flush interval, and
+  the free-disk threshold.
+
+## Sample trace
+
+This excerpt comes from a test harness run against the mock driver, trimmed
+for length:
 
 ```
-py -3.12 -c "import struct; print(struct.calcsize('P')*8)"
+[15:52:49.371 +021801us] PassThruOpen(name='') -> 0 deviceId=1
+[15:52:49.371 +000033us] GetProcAddress failed for 'PassThruReadVoltage'
+[15:52:49.371 +000106us] ReadVersion(device=1) -> 0 fw='1.0-MOCK' dll='1.0-MOCK' api='4.04'
+[15:52:49.371 +000079us] PassThruConnect(device=1 proto=0x6 flags=0x0 baud=500000) -> 0 channel=1
+MSG TX ch=1 proto=0x6 txflags=0x0 rxstatus=0x0 ts=0 len=2 edi=2 data=10 03
+[15:52:49.372 +000424us] PassThruWriteMsgs(ch=1 timeout=1000) -> 0
+[15:52:49.372 +000024us] PassThruReadMsgs(ch=1 timeout=1000) -> 0 num=1
+MSG RX ch=1 proto=0x6 txflags=0x0 rxstatus=0x0 ts=1002 len=2 edi=2 data=50 03
+...
+[15:52:49.393 +004776us] Ioctl(handle=1 id=0x2) -> 0
+[15:52:49.393 +000016us]   SET_CONFIG param=0x2 value=0x1
 ```
 
-## Build
+`10 03` is a UDS extended-session request, and the mock answers with the
+positive response `50 03`. The mock deliberately omits `PassThruReadVoltage`,
+so the proxy logs the missing export instead of crashing. `Ioctl`
+SET_CONFIG/GET_CONFIG parameter lists are decoded inline. The full line
+format is in [docs/USAGE.md](docs/USAGE.md#reading-a-trace).
+
+## Design decisions
+
+- **Fails open.** If logging can't start (low disk) or a write fails
+  mid-session, logging shuts down for that process and the proxy keeps
+  forwarding. A lost log is recoverable; a stalled call path during a
+  flash session is not.
+- **Low overhead.** By default every line is flushed, for maximum capture
+  fidelity. In harness runs, a logged `Ioctl` round trip
+  (Python → proxy → mock → log) takes a median of about 8 µs. Check 19 fails
+  if logging overhead reaches 2 ms per call. `flush_ms` trades the risk of
+  losing the unflushed tail for fewer disk syncs.
+- **Thread safe.** A single mutex serializes the log writer, and filter hex
+  dumps use per-thread buffers, so concurrent callers never produce torn
+  lines or crossed filter data (checks 13 and 18). Export resolution is
+  cached behind its own lock.
+- **Timing-accurate traces.** Every line carries a microsecond delta from
+  `QueryPerformanceCounter`. Every message also carries the device's own
+  timestamp, for inter-frame timing analysis.
+- **ABI mismatch detection.** A message whose `DataSize` exceeds the
+  4128-byte buffer, or whose `ExtraDataIndex` exceeds `DataSize`, is flagged
+  `[SUSPECT]`. This is a cheap signal that the application and driver
+  disagree on struct layout.
+- **Graceful failure.** A missing real driver or unresolved export returns
+  `ERR_NOT_SUPPORTED` (`0xE2`) and is logged. The host application never
+  crashes.
+- **Nothing vendor-specific in the repo.** The version resource is generated
+  from a template at build time. Values that some applications check are
+  kept in a gitignored local file.
+- **Clean builds.** The proxy builds with MSVC `/W4`. New warnings get fixed
+  or consciously accepted, not suppressed.
+
+## Testing
+
+A Python `ctypes` harness loads the built proxy against a C++ mock vendor
+driver and runs 20 numbered checks:
+
+- API round trips and payload integrity, including a 3000-byte message
+  checked byte for byte
+- timeouts, error-code propagation, a missing export, and a missing driver
+- `Ioctl` decoding
+- multithreaded stress
+- disabled mode, the low-disk fail-open path, and a latency budget
+
+Load-time behavior is exercised in fresh subprocesses, because configuration
+is read in `DllMain`.
+
+The harness validates proxy plumbing. It can't validate the ABI against a
+real vendor driver; only a live session can confirm that.
+
+Full check list and harness design: [docs/TESTING.md](docs/TESTING.md).
+
+## Quick start
+
+Requires Visual Studio Build Tools (C++), CMake 3.24+, and **32-bit**
+Python. The DLLs are Win32/x86 to match the host applications.
 
 ```
 cmake -B build -G "Visual Studio 18 2026" -A Win32
 cmake --build build --config Release
-```
-
-Adjust the `-G` string to your installed Visual Studio version
-(e.g. `"Visual Studio 16 2019"`, `"Visual Studio 17 2022"`).
-When switching generators on an existing build directory, add `--fresh`
-to avoid a cache mismatch error:
-
-```
-cmake -B build -G "<generator>" -A Win32 --fresh
-```
-
-Win32 is required. The DLL must match the bitness of the target
-application. Verify with:
-
-```
-dumpbin /headers build/proxy/trace.dll | findstr machine
-```
-
-(must print `x86`)
-
-Build outputs:
-
-```
-build/proxy/trace.dll          deployable proxy
-test/vendor_J2534.dll          proxy copy placed in the test rig
-test/vendor_J2534_orig.dll     mock driver for testing
-test/trace.ini                 [trace] enabled=1
-```
-
-## Test
-
-To run tests after building:
-
-```
 py -3.12 test/harness.py
 ```
 
-Checks performed (20 total, numbered in output):
+| Doc | Covers |
+|-----|--------|
+| [docs/BUILDING.md](docs/BUILDING.md) | Toolchain, generators, verifying the x86 build, version resource |
+| [docs/USAGE.md](docs/USAGE.md) | Deploying next to a real driver, `trace.ini` reference, trace format, reverting |
+| [docs/TESTING.md](docs/TESTING.md) | Harness design, all 20 checks, limitations |
 
-| # | Check | Covers |
-|---|-------|--------|
-| 1 | banner + log file created | Logger init on DLL load |
-| 2–5 | Open / ReadVersion / Connect / StartMsgFilter | Basic API round trips |
-| 6–7 | UDS echo TX/RX logged | Write/read capture with intact hex |
-| 8 | 3000-byte payload fully logged | No truncation on large messages |
-| 9 | timeout path | Error return, no phantom RX logged |
-| 10 | unresolved export | Missing export → 0xE2, logged, no crash |
-| 11–12 | Ioctl SET/GET_CONFIG decode | SCONFIG round-trip |
-| 13 | thread stress | 3 workers, no torn log lines |
-| 14 | disabled mode | enabled=0 → no trace file, calls succeed |
-| 15 | missing real DLL | Graceful 0xE2 failure, no crash |
-| 16 | periodic message logging | StartPeriodicMsg traffic logged |
-| 17 | error code propagation | Invalid channel error returned + logged |
-| 18 | concurrent filters | 4 threads × 200 filters, correct data each |
-| 19 | logging latency < 2ms/call | Measured overhead of enabled logging |
-| 20 | low-disk guard | min_free_mb → fail open, no trace file |
-
-Exit code 0 means all passed. Failures print as `FAIL #N: <name>` with
-the failing check number.
-
-Limitation: the harness validates proxy plumbing (logging, threading,
-error handling, path resolution). It cannot validate the ABI against the
-real driver. That can only be confirmed in a live session.
-
-## Deployment
-
-In the target application folder:
-
-1. Rename the original driver:
-
-   ```
-   <vendor_name>_J2534.dll  ->  <vendor_name>_J2534_orig.dll
-   ```
-
-2. Copy the built proxy in, named as the original:
-
-   ```
-   build/proxy/trace.dll  ->  <vendor_name>_J2534.dll
-   ```
-
-3. Add a `trace.ini` next to the DLLs:
-
-   ```ini
-   [trace]
-   enabled=1
-   ; dll_suffix: suffix appended to the proxy's own filename to find the
-   ; real driver (default _orig). Only set this if you renamed differently.
-   dll_suffix=_orig
-   ; flush_ms: 0 = flush after every log line (default, max fidelity).
-   ; Higher values (e.g. 250) reduce disk sync overhead during
-   ; latency-sensitive sessions, at the cost of losing the un-flushed
-   ; tail if the host process dies.
-   flush_ms=0
-   ; min_free_mb: logging refuses to start below this much free disk
-   ; space (default 200). Fail-open: the proxy keeps forwarding traffic,
-   ; just without logging.
-   min_free_mb=200
-   ```
-
-Set `enabled=0` to disable logging without removing the proxy.
-
-4. Verify the deployed copy carries version metadata (blank values
-   mean the target app will reject it):
-
-   ```
-   (Get-Item <vendor_name>_J2534.dll).VersionInfo | Format-List FileVersion
-   ```
-
-Expected folder layout after deployment:
+## Repository layout
 
 ```
-/
-├── <vendor_name>_J2534.dll          <- our proxy
-├── <vendor_name>_J2534_orig.dll     <- original driver
-├── trace.ini                        <- [trace] enabled=1
-└── traces/                          <- created on first launch
-    └── trace_YYYYMMDD_HHMMSS_mmm_pidNNNN.log
+proxy/
+  proxy.cpp          15 PassThru* exports: resolve, forward, log
+  logger.cpp/.h      serialized trace writer, flush policy, low-disk guard
+  j2534_types.h      PASSTHRU_MSG / SCONFIG layouts
+  exports.def        undecorated export names
+  resource.rc.in     version-resource template
+test/
+  harness.py         20-check end-to-end harness
+  mock_driver/       mock vendor driver: UDS echo, config store, periodic msgs
+docs/                build, usage, and testing reference
 ```
 
-## To revert
+## License
 
-Delete the proxy copy and rename `<vendor_name>_J2534_orig.dll` back to 
-`<vendor_name>_J2534.dll`. The application is then completely stock again.
-
-## Notes
-
-- Traces are written to `traces/` inside the app folder, one file per
-  process, timestamped and PID-suffixed. The file is opened with shared
-  read access so it can be tailed live (`Get-Content -Wait` in
-  PowerShell).
-- Log lines carry microsecond delta timestamps (`+[us]`) for
-  inter-frame timing analysis.
-- Messages with implausible DataSize/ExtraDataIndex values are flagged
-  `SUSPECT` (possible ABI mismatch indicator).
-- The full payload of every TX/RX message is logged (up to 4128 bytes).
-  Expect large files during flash sessions.
-- Do not commit traces. They may contain security access seed/key
-  material from your ECU.
-- Generated test artifacts (`*.dll`, `traces/`, `trace.ini`) are gitignored.
-  The test rig is rebuilt by CMake and never committed.
-- The proxy's version resource is generated at build time from
-  `proxy/resource.rc.in`. Vendor-mimicking values live in
-  `proxy/resource_values.local.rc`, which is **gitignored** — if the
-  target app validates driver version info and rejects mismatched DLLs
-  ("not supported"), regenerate that file from the current vendor DLL's
-  metadata and rebuild. The absence of the local file builds neutral
-  version info.
-- If any log write fails mid-session (disk full being the realistic
-  case), logging shuts down permanently for that process and the proxy
-  continues forwarding without capture — a lost log is recoverable, a
-  stalled call path during a flash session is not.
-- The proxy build enables MSVC /W4; fix or consciously accept any new
-  warning rather than suppressing it.
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Read
+[DISCLAIMER.md](DISCLAIMER.md) before use; contribution terms are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
